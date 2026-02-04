@@ -2,9 +2,10 @@
 
 ## How to Run Locally
 
-### 1. Setup (one-time)
+### 1. Clone and Setup (one-time)
 ```bash
-cd Lab_Week1
+git clone https://github.com/dhruv12304/273_Lab1.git
+cd 273_Lab1
 python3 -m venv venv
 source venv/bin/activate
 pip install flask requests
