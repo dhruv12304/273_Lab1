@@ -177,6 +177,72 @@ curl -H "X-Correlation-ID: my-trace-12304" "http://127.0.0.1:8082/process?msg=he
 
 ---
 
+## Failure Scenarios Explained
+
+### What happens if Service A is down?
+
+When Service A is stopped or unreachable:
+
+1. **Service B** attempts to connect to Service A at `localhost:8080`
+2. The connection is **refused** (Service A process not running)
+3. Service B catches the `ConnectionError` exception
+4. Service B logs the error with `status=error` and the correlation ID
+5. Service B returns **HTTP 503** (Service Unavailable) with error details
+6. **Service C** receives the 503 from Service B
+7. Service C logs its own error and returns **HTTP 503** to the client
+
+The client receives a clear error response indicating the downstream service is unavailable, while Service B and C remain healthy and can handle other requests.
+
+### What happens on timeout?
+
+Each service has a configured timeout to prevent cascading delays:
+
+- **Service B**: 1 second timeout when calling Service A
+- **Service C**: 2 second timeout when calling Service B
+
+If Service A becomes slow (e.g., stuck in a long operation):
+
+1. Service B waits up to **1 second** for a response
+2. If no response, a `ReadTimeout` exception is raised
+3. Service B logs the timeout error and returns **HTTP 503**
+4. The request fails fast instead of hanging indefinitely
+
+This prevents a slow downstream service from blocking all upstream services (cascading failure).
+
+### How to debug using the logs?
+
+The structured logs make debugging straightforward:
+
+1. **Find the correlation ID** from the error response or client logs
+2. **Search all service logs** for that correlation ID:
+   ```bash
+   grep "correlation_id=my-trace-123" service-*.log
+   ```
+3. **Trace the request path**:
+   - Check Service C log: Did it receive the request?
+   - Check Service B log: Did it forward to Service A? What error occurred?
+   - Check Service A log: Did it receive the request? (If missing, Service A was down)
+
+4. **Identify the failure point**:
+   - If Service A has no log entry → Service A was down/unreachable
+   - If Service B shows `status=error` → Problem between B and A
+   - If latency is high before error → Timeout occurred
+
+**Example debug flow:**
+```
+# Client gets error with correlation_id=abc-123
+# Check Service C log:
+2024-01-15 10:30:00 service=C correlation_id=abc-123 status=error  ← C received request, got error from B
+
+# Check Service B log:
+2024-01-15 10:30:00 service=B correlation_id=abc-123 status=error error="Connection refused"  ← B couldn't reach A
+
+# Check Service A log:
+(no entry for abc-123)  ← Confirms A was down
+```
+
+---
+
 ## What Makes This Distributed?
 
 This system is distributed because it consists of **three independent processes** (Service A, B, and C) that communicate over the network using HTTP, rather than sharing memory or running in the same process.
